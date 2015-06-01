@@ -1,38 +1,57 @@
 package com.datatorrent.demos.ml.classifier.nb;
 
 import org.apache.hadoop.conf.Configuration;
+
 import com.datatorrent.api.DAG;
 import com.datatorrent.api.DAG.Locality;
 import com.datatorrent.api.StreamingApplication;
-import com.datatorrent.lib.ml.classification.ARFFReader;
+import com.datatorrent.lib.ml.classification.NBConfig;
+import com.datatorrent.lib.ml.classification.NBInputReader;
 import com.datatorrent.lib.ml.classification.FileInputOperator;
-import com.datatorrent.lib.ml.classification.FileOutputPerWindowOperator;
-import com.datatorrent.lib.ml.classification.NaiveBayesCounter;
-import com.datatorrent.lib.ml.classification.NaiveBayesModelAggregator;
-import com.datatorrent.lib.ml.classification.NaiveBayesModelStorage;
+import com.datatorrent.lib.ml.classification.NBOutputPerWindowOperator;
+import com.datatorrent.lib.ml.classification.NBCounter;
+import com.datatorrent.lib.ml.classification.NBModelAggregator;
+import com.datatorrent.lib.ml.classification.NBModelStorage;
 
 public class Application implements StreamingApplication {
 
 	public void populateDAG(DAG dag, Configuration conf) {
 
-		FileInputOperator opInput = dag.addOperator("Input Operator", new FileInputOperator());
+		NBConfig nbc = new NBConfig(true, 3);
+		
+		// File Input Operator
+		FileInputOperator opInput = dag.addOperator("FileInput", new FileInputOperator());
 		opInput.setDirectory("/input");
 
-		ARFFReader opArffReader = dag.addOperator("ARRFReader", new ARFFReader());
+		// Input Reader
+		NBInputReader opNBInputReader = dag.addOperator("NBInput", new NBInputReader(nbc));
 		
-		NaiveBayesCounter opNaiveBayesCounter = dag.addOperator("Naive Bayes Counter", new NaiveBayesCounter());
+		// NB Counter
+		NBCounter opNBCounter = dag.addOperator("NBCounter", new NBCounter(nbc));
 		
-		NaiveBayesModelAggregator<NaiveBayesModelStorage> opNaiveBayesAggregator = 
-				dag.addOperator("Naive Bayes Model Aggregator", new NaiveBayesModelAggregator<NaiveBayesModelStorage>());
+		// NB Aggregator
+		NBModelAggregator<NBModelStorage> opNBAggregator = 
+				dag.addOperator("NBAggregator", new NBModelAggregator<NBModelStorage>(nbc));
 		
-		FileOutputPerWindowOperator opOutput = dag.addOperator("PMML Writer", new FileOutputPerWindowOperator());
-		opOutput.setFilePath("/pmmloutput");
-		opOutput.setFileName("PMML_HIGGS_CATEGORICAL.xml");
-		opOutput.setOverwrite(true);
+		// File Output Operator
+		NBOutputPerWindowOperator opNBOutput = dag.addOperator("NBModelWriter", new NBOutputPerWindowOperator(nbc));
+		opNBOutput.setFilePath("/pmmloutput");
+		opNBOutput.setFileName("PMML_HIGGS_CATEGORICAL.xml");
+		opNBOutput.setOverwrite(true);
+
+		// Streams
 		
-		dag.addStream("File Reader To Arff Reader", opInput.output, opArffReader.input).setLocality(Locality.THREAD_LOCAL);
-		dag.addStream("Arff Reader To NB Counter", opArffReader.output, opNaiveBayesCounter.input);
-		dag.addStream("NB Counter to NB Aggregator", opNaiveBayesCounter.output, opNaiveBayesAggregator.data);
-		dag.addStream("NB Aggregator To Pmml Writer", opNaiveBayesAggregator.output, opOutput.input);
+		dag.addStream("FileInput To NBInput", opInput.output, opNBInputReader.input).setLocality(Locality.THREAD_LOCAL);
+		
+		//Training FLow
+		dag.addStream("NBInput To NBCounter", opNBInputReader.output, opNBCounter.input);
+		dag.addStream("NBCounter to NBAggregator", opNBCounter.output, opNBAggregator.data);
+		dag.addStream("NBAggregator To NBModelWriter", opNBAggregator.output, opNBOutput.input);
+
+		//K Fold Validation Flow
+		dag.addStream("NBInput - NBCounter", opNBInputReader.kFoldOutput, opNBCounter.kFoldInput);
+		dag.addStream("NBCounter - NBAggregator", opNBCounter.kFoldOutput, opNBAggregator.kFoldInput);
+		dag.addStream("NBAggregator - NBModelWriter", opNBAggregator.kFoldOutput, opNBOutput.kFoldInput);
+		
 	}
 }
